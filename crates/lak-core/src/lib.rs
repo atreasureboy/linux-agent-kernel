@@ -4,6 +4,7 @@
 //! 这是整个 LAK 项目的基础 crate。
 
 pub mod error;
+pub mod token_budget;
 pub mod traits;
 pub mod types;
 

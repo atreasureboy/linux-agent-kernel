@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::ids::{AgentId, TaskId, MemoryChunkId};
+use super::ids::{AgentId, MemoryChunkId, TaskId};
 
 /// 认知任务：Agent 需要完成的一项认知工作
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,19 +63,35 @@ impl CognitivePriority {
     }
 
     pub fn low() -> Self {
-        Self { urgency: 10, importance: 20, context_affinity: 10 }
+        Self {
+            urgency: 10,
+            importance: 20,
+            context_affinity: 10,
+        }
     }
 
     pub fn normal() -> Self {
-        Self { urgency: 40, importance: 50, context_affinity: 50 }
+        Self {
+            urgency: 40,
+            importance: 50,
+            context_affinity: 50,
+        }
     }
 
     pub fn high() -> Self {
-        Self { urgency: 80, importance: 80, context_affinity: 70 }
+        Self {
+            urgency: 80,
+            importance: 80,
+            context_affinity: 70,
+        }
     }
 
     pub fn critical() -> Self {
-        Self { urgency: 100, importance: 100, context_affinity: 90 }
+        Self {
+            urgency: 100,
+            importance: 100,
+            context_affinity: 90,
+        }
     }
 }
 

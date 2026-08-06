@@ -43,10 +43,58 @@ http = "1"
 tokio-test = "0.4"
 proptest = "1"
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# kernel errors are rich enums; boxing them would hurt ergonomics
+result-large-err = "allow"
+# docs for every Result/panic path are disproportionate for an MVP;
+# doc_markdown is extremely noisy against Chinese prose containing
+# identifier names
+missing-errors-doc = "allow"
+missing-panics-doc = "allow"
+must-use-candidate = "allow"
+module-name-repetitions = "allow"
+doc-markdown = "allow"
+# numeric conversions between token counts and u64/usize are benign here
+cast-precision-loss = "allow"
+cast-possible-truncation = "allow"
+cast-sign-loss = "allow"
+cast-possible-wrap = "allow"
+cast-lossless = "allow"
+too-many-lines = "allow"
+similar-names = "allow"
+struct-excessive-bools = "allow"
+fn-params-excessive-bools = "allow"
+# stylistic preferences that do not affect correctness
+map-unwrap-or = "allow"
+match-same-arms = "allow"
+wildcard-imports = "allow"
+redundant-closure-for-method-calls = "allow"
+return-self-not-must-use = "allow"
+needless-pass-by-value = "allow"
+format-push-string = "allow"
+unused-self = "allow"
+duration-suboptimal-units = "allow"
+default-trait-access = "allow"
+items-after-statements = "allow"
+single-match = "allow"
+single-match-else = "allow"
+match-wildcard-for-single-variants = "allow"
+ref-option = "allow"
+manual-range-contains = "allow"
+len-zero = "allow"
+manual-string-new = "allow"
+uninlined-format-args = "allow"
+assigning-clones = "allow"
+unnecessary-literal-bound = "allow"
+no-effect-underscore-binding = "allow"
+option-if-let-else = "allow"
+missing-const-for-fn = "allow"

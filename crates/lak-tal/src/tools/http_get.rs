@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use lak_core::types::capability::{CapabilityPermission, CapabilityRequirement, CapabilityType};
 use super::*;
+use lak_core::types::capability::{CapabilityPermission, CapabilityRequirement, CapabilityType};
 
 #[derive(Debug, Default)]
 pub struct HttpGetTool;
@@ -25,7 +25,16 @@ impl Tool for HttpGetTool {
     fn required_capability(&self) -> CapabilityRequirement {
         CapabilityRequirement {
             cap_type: CapabilityType::NetworkHttp,
-            scope: "{url}".into(),
+            scope: "http*".into(),
+            min_permissions: CapabilityPermission::READ,
+        }
+    }
+
+    fn required_capability_for(&self, params: &serde_json::Value) -> CapabilityRequirement {
+        let url = params["url"].as_str().unwrap_or_default();
+        CapabilityRequirement {
+            cap_type: CapabilityType::NetworkHttp,
+            scope: url.to_string(),
             min_permissions: CapabilityPermission::READ,
         }
     }
@@ -56,6 +65,19 @@ impl Tool for HttpGetTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidParams("url is required".into()))?;
 
+        // URLs must parse — an unparseable URL must never slip past the
+        // network policy checks below (fail closed).
+        let parsed = url::Url::parse(url_str)
+            .map_err(|e| ToolError::InvalidParams(format!("invalid URL: {e}")))?;
+
+        // Only plain HTTP(S) — reject file://, gopher:// etc.
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(ToolError::AccessDenied(format!(
+                "URL scheme '{}' is not allowed; only http/https",
+                parsed.scheme()
+            )));
+        }
+
         // Network policy check
         match &context.sandbox.network_policy {
             NetworkPolicy::None => {
@@ -64,24 +86,25 @@ impl Tool for HttpGetTool {
                 ));
             }
             NetworkPolicy::LocalhostOnly => {
-                if let Ok(parsed) = url::Url::parse(url_str) {
-                    if parsed.host_str() != Some("localhost")
-                        && parsed.host_str() != Some("127.0.0.1")
-                    {
-                        return Err(ToolError::AccessDenied(
-                            "Only localhost access is allowed".into(),
-                        ));
-                    }
+                let host = parsed.host_str().unwrap_or("");
+                if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+                    return Err(ToolError::AccessDenied(
+                        "Only localhost access is allowed".into(),
+                    ));
                 }
             }
             NetworkPolicy::Allowlist(allowed) => {
-                if let Ok(parsed) = url::Url::parse(url_str) {
-                    let host = parsed.host_str().unwrap_or("");
-                    if !allowed.iter().any(|a| host.contains(a.as_str())) {
-                        return Err(ToolError::AccessDenied(format!(
-                            "Access to '{host}' is not in the allowlist"
-                        )));
-                    }
+                let host = parsed.host_str().unwrap_or("");
+                // Exact match or subdomain of an allowlisted domain.
+                // Substring `contains` is unsafe: "example.com" would
+                // accept "evil-example.com".
+                let allowed = allowed.iter().any(|a| {
+                    host == a.as_str() || host.ends_with(format!(".{}", a.as_str()).as_str())
+                });
+                if !allowed {
+                    return Err(ToolError::AccessDenied(format!(
+                        "Access to '{host}' is not in the allowlist"
+                    )));
                 }
             }
             NetworkPolicy::All => {} // No restriction
@@ -117,12 +140,13 @@ impl Tool for HttpGetTool {
             .await
             .map_err(|e| ToolError::ExecutionError(e.to_string()))?;
 
-        let body_len = body.len(); // Save before move
+        let body_len = body.len();
 
-        // Truncate large responses
-        let truncated = body_len > 500_000;
+        // Truncate large responses (at a UTF-8 char boundary)
+        const MAX_BODY: usize = 500_000;
+        let truncated = body_len > MAX_BODY;
         let display_body = if truncated {
-            body[..500_000].to_string()
+            truncate_utf8(&body, MAX_BODY)
         } else {
             body
         };

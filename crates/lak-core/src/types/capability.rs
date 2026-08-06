@@ -55,11 +55,11 @@ pub enum CapabilityType {
     // 记忆
     MemoryRead,
     MemoryWrite,
-    MemoryShare,     // 与其他 Agent 共享记忆
+    MemoryShare, // 与其他 Agent 共享记忆
 
     // LLM
     LLMCall,
-    LLMFineTune,     // 微调模型（高危）
+    LLMFineTune, // 微调模型（高危）
 
     // 意图
     IntentSend,
@@ -202,7 +202,10 @@ impl Capability {
         // 不能扩大范围（简单检查：新 pattern 比旧 pattern 更长/更具体）
         if scope.pattern.len() > self.scope.pattern.len()
             && !scope.pattern.starts_with(
-                self.scope.pattern.trim_end_matches("**").trim_end_matches('*'),
+                self.scope
+                    .pattern
+                    .trim_end_matches("**")
+                    .trim_end_matches('*'),
             )
         {
             return Err(AttenuationError::ScopeExpansion);
@@ -264,16 +267,11 @@ impl CapabilityCertificate {
         if !self.is_valid() {
             return false;
         }
-        self.capabilities
-            .iter()
-            .any(|c| c.satisfies(requirement))
+        self.capabilities.iter().any(|c| c.satisfies(requirement))
     }
 
     /// 查找满足需求的能力（用于委派时找到源能力）
-    pub fn find_capability(
-        &self,
-        requirement: &CapabilityRequirement,
-    ) -> Option<&Capability> {
+    pub fn find_capability(&self, requirement: &CapabilityRequirement) -> Option<&Capability> {
         self.capabilities
             .iter()
             .find(|c| c.satisfies(requirement) && c.is_delegatable())
@@ -400,7 +398,9 @@ mod tests {
             )
             .unwrap();
 
-        assert!(attenuated.scope.matches("file:///workspace/project/file.txt"));
+        assert!(attenuated
+            .scope
+            .matches("file:///workspace/project/file.txt"));
         assert!(!attenuated.scope.matches("file:///workspace/other/file.txt"));
         assert_eq!(attenuated.constraints.len(), 1);
     }
@@ -433,8 +433,8 @@ mod tests {
             }],
         };
 
-        assert!(cap.is_within_time_window(10));  // 上午 10 点
-        assert!(!cap.is_within_time_window(3));  // 凌晨 3 点
+        assert!(cap.is_within_time_window(10)); // 上午 10 点
+        assert!(!cap.is_within_time_window(3)); // 凌晨 3 点
         assert!(!cap.is_within_time_window(20)); // 晚上 8 点
     }
 

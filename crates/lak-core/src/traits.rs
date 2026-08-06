@@ -6,9 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::KernelError;
 use crate::types::agent::{Agent, AgentSpec};
-use crate::types::capability::{
-    Capability, CapabilityCertificate, CapabilityRequirement,
-};
+use crate::types::capability::{Capability, CapabilityCertificate, CapabilityRequirement};
 use crate::types::ids::*;
 use crate::types::intent::{IntentMessage, IntentSubscription};
 use crate::types::memory::MemoryChunk;
@@ -58,10 +56,7 @@ pub trait AgentKernel: Send + Sync {
     // ── 意图路由 ──
 
     /// 发送意图
-    async fn send_intent(
-        &self,
-        intent: IntentMessage,
-    ) -> Result<IntentId, KernelError>;
+    async fn send_intent(&self, intent: IntentMessage) -> Result<IntentId, KernelError>;
 
     /// 等待意图（阻塞直到收到匹配的意图）
     async fn await_intent(
@@ -73,11 +68,7 @@ pub trait AgentKernel: Send + Sync {
     // ── 语义记忆 ──
 
     /// 存储记忆
-    async fn store_memory(
-        &self,
-        agent_id: AgentId,
-        chunk: MemoryChunk,
-    ) -> Result<(), KernelError>;
+    async fn store_memory(&self, agent_id: AgentId, chunk: MemoryChunk) -> Result<(), KernelError>;
 
     /// 查询记忆
     async fn query_memory(
@@ -105,10 +96,7 @@ pub trait AgentKernel: Send + Sync {
     ) -> Result<CapabilityCertId, KernelError>;
 
     /// 撤销能力
-    async fn revoke_capability(
-        &self,
-        cert_id: CapabilityCertId,
-    ) -> Result<(), KernelError>;
+    async fn revoke_capability(&self, cert_id: CapabilityCertId) -> Result<(), KernelError>;
 
     /// 委派能力（带衰减）
     async fn delegate_capability(

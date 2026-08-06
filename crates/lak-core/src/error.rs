@@ -1,7 +1,7 @@
 //! Agent Kernel 的统一错误类型
 
-use crate::types::ids::{AgentId, TaskId, IntentId};
 use crate::types::capability::{Capability, CapabilityRequirement};
+use crate::types::ids::{AgentId, IntentId, MemoryChunkId, TaskId};
 
 /// Agent Kernel 的所有可能错误
 #[derive(Debug, thiserror::Error)]
@@ -14,6 +14,9 @@ pub enum KernelError {
 
     #[error("Intent '{0}' not found")]
     IntentNotFound(IntentId),
+
+    #[error("Memory chunk '{0}' not found")]
+    MemoryNotFound(MemoryChunkId),
 
     #[error("Insufficient capability: required {required:?}, have {have:?}")]
     InsufficientCapability {
@@ -82,6 +85,7 @@ impl KernelError {
             Self::AgentNotFound(_) => "AGENT_NOT_FOUND",
             Self::TaskNotFound(_) => "TASK_NOT_FOUND",
             Self::IntentNotFound(_) => "INTENT_NOT_FOUND",
+            Self::MemoryNotFound(_) => "MEMORY_NOT_FOUND",
             Self::InsufficientCapability { .. } => "CAPABILITY_DENIED",
             Self::ContextOverflow { .. } => "CONTEXT_OVERFLOW",
             Self::ResourceExhausted { .. } => "RESOURCE_EXHAUSTED",

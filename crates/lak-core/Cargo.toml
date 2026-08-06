@@ -11,14 +11,12 @@ chrono.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 bitflags = { version = "2", features = ["serde"] }
-glob.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
-tokio.workspace = true
-dashmap.workspace = true
-parking_lot.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 tokio-test.workspace = true
+
+[lints]
+workspace = true

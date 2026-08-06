@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use lak_core::types::capability::{CapabilityPermission, CapabilityRequirement, CapabilityType};
 use super::*;
+use lak_core::types::capability::{CapabilityPermission, CapabilityRequirement, CapabilityType};
 
 #[derive(Debug, Default)]
 pub struct ShellCmdTool;
@@ -65,22 +65,42 @@ impl Tool for ShellCmdTool {
             .unwrap_or(context.sandbox.timeout.as_secs())
             .min(context.sandbox.timeout.as_secs());
 
+        // Working directory: honour the parameter but only inside the
+        // sandbox's writable paths (fail closed).
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(command);
+
+        if let Some(dir) = params["working_dir"].as_str() {
+            let canonical = std::path::Path::new(dir)
+                .canonicalize()
+                .map_err(|e| ToolError::InvalidParams(format!("invalid working_dir: {e}")))?;
+            let inside_sandbox = context
+                .sandbox
+                .writable_paths
+                .iter()
+                .any(|p| canonical.starts_with(p));
+            if !inside_sandbox {
+                return Err(ToolError::AccessDenied(format!(
+                    "working_dir '{}' is outside sandbox writable paths",
+                    canonical.display()
+                )));
+            }
+            cmd.current_dir(canonical);
+        }
+
         // MVP: Execute directly with timeout
         // Phase 2: Full sandbox with seccomp + namespaces
-        let output = tokio::time::timeout(
-            tokio::time::Duration::from_secs(timeout_secs),
-            tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .output(),
-        )
-        .await
-        .map_err(|_| ToolError::Timeout)?;
+        let output =
+            tokio::time::timeout(tokio::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+                .map_err(|_| ToolError::Timeout)?;
 
         let output = output.map_err(|e| ToolError::ExecutionError(e.to_string()))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        const MAX_OUTPUT: usize = 100_000;
+        let stdout = truncate_utf8(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT);
+        let stderr = truncate_utf8(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT);
+        let truncated = output.stdout.len() > MAX_OUTPUT || output.stderr.len() > MAX_OUTPUT;
 
         Ok(ToolResult {
             success: output.status.success(),
@@ -89,7 +109,7 @@ impl Tool for ShellCmdTool {
                 "exit_code": output.status.code(),
                 "stdout": stdout,
                 "stderr": stderr,
-                "truncated": stdout.len() > 100_000 || stderr.len() > 100_000,
+                "truncated": truncated,
             }),
             audit_info: Some(AuditInfo {
                 resource: command.to_string(),

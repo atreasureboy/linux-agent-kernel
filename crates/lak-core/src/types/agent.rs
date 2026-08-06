@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::ids::AgentId;
 use super::capability::Capability;
+use super::ids::AgentId;
 
 /// 创建 Agent 时所需的规格
 #[derive(Debug, Clone, Serialize, Deserialize)]

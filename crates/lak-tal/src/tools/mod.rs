@@ -127,8 +127,18 @@ pub trait Tool: Send + Sync + std::fmt::Debug {
     /// 危险等级
     fn danger_level(&self) -> DangerLevel;
 
-    /// 所需的能力
+    /// 所需的能力（静态描述，用于展示/注册）
     fn required_capability(&self) -> CapabilityRequirement;
+
+    /// 针对具体参数计算所需能力（用于执行时的能力检查）。
+    ///
+    /// 与 `required_capability` 不同，这里的 scope 是具体资源
+    /// （如 `file:///etc/hosts`），因此可以用持有能力的 glob 模式
+    /// 精确匹配，而不是和占位符比较。
+    fn required_capability_for(&self, params: &serde_json::Value) -> CapabilityRequirement {
+        let _ = params;
+        self.required_capability()
+    }
 
     /// 参数 JSON Schema
     fn parameters_schema(&self) -> serde_json::Value;
@@ -141,12 +151,25 @@ pub trait Tool: Send + Sync + std::fmt::Debug {
     ) -> Result<ToolResult, ToolError>;
 }
 
+/// Truncate a string to at most `max_bytes` bytes without splitting a
+/// UTF-8 code point (slicing at arbitrary byte offsets can panic).
+pub(crate) fn truncate_utf8(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 // ── Built-in tools ──
 
 mod file_read;
-mod shell_cmd;
 mod http_get;
+mod shell_cmd;
 
 pub use file_read::FileReadTool;
-pub use shell_cmd::ShellCmdTool;
 pub use http_get::HttpGetTool;
+pub use shell_cmd::ShellCmdTool;

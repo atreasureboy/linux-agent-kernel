@@ -27,7 +27,16 @@ impl Tool for FileReadTool {
     fn required_capability(&self) -> CapabilityRequirement {
         CapabilityRequirement {
             cap_type: CapabilityType::FileRead,
-            scope: "{path}".into(),
+            scope: "file:///**".into(),
+            min_permissions: CapabilityPermission::READ,
+        }
+    }
+
+    fn required_capability_for(&self, params: &serde_json::Value) -> CapabilityRequirement {
+        let path = params["path"].as_str().unwrap_or_default();
+        CapabilityRequirement {
+            cap_type: CapabilityType::FileRead,
+            scope: format!("file://{path}"),
             min_permissions: CapabilityPermission::READ,
         }
     }
@@ -75,8 +84,8 @@ impl Tool for FileReadTool {
         let max_lines = params["max_lines"].as_u64().unwrap_or(1000) as usize;
 
         // File size check
-        let metadata = std::fs::metadata(&canonical)
-            .map_err(|e| ToolError::ExecutionError(e.to_string()))?;
+        let metadata =
+            std::fs::metadata(&canonical).map_err(|e| ToolError::ExecutionError(e.to_string()))?;
 
         if metadata.len() > context.sandbox.max_file_read_bytes {
             return Err(ToolError::ResourceLimitExceeded(format!(

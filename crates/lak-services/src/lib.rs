@@ -1,6 +1,11 @@
-//! Agent Services — Reasoning, Memory, Tool Registry, and Kernel
+//! Agent Services — Reasoning, Memory, Tool Registry, Scheduler, and Kernel
 
-pub mod reasoning;
-pub mod memory;
-pub mod tool_registry;
+pub mod injection_defense;
+pub mod intent_router;
+pub mod journal;
 pub mod kernel;
+pub mod memory;
+pub mod reasoning;
+pub mod scheduler;
+pub mod speculative;
+pub mod tool_registry;

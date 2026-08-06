@@ -7,14 +7,14 @@ description = "Linux Agent Kernel — Agent Services (reasoning, memory, tool re
 [dependencies]
 lak-core = { path = "../lak-core" }
 lak-tal = { path = "../lak-tal" }
+lak-are = { path = "../lak-are" }
 async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-thiserror.workspace = true
-uuid.workspace = true
 chrono.workspace = true
-dashmap.workspace = true
-parking_lot.workspace = true
 futures.workspace = true
+
+[lints]
+workspace = true

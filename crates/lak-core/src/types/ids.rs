@@ -35,6 +35,12 @@ macro_rules! define_id {
                 write!(f, "{}", self.0)
             }
         }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
     };
 }
 

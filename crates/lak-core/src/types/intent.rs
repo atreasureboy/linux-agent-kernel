@@ -6,8 +6,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::ids::{AgentId, IntentId};
 use super::capability::CapabilityType;
+use super::ids::{AgentId, IntentId};
 
 /// 意图消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,9 +41,7 @@ pub enum IntentTarget {
         semantic_hint: Option<String>,
     },
     /// 发布-订阅模式：匹配订阅此模式的 Agent
-    PublishSubscribe {
-        pattern: String,
-    },
+    PublishSubscribe { pattern: String },
 }
 
 /// 意图类型
