@@ -1,0 +1,24 @@
+[package]
+name = "lak-core"
+version = "0.1.0"
+edition = "2021"
+description = "Linux Agent Kernel — core types and kernel interface"
+
+[dependencies]
+uuid.workspace = true
+serde.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+bitflags = { version = "2", features = ["serde"] }
+glob.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio-test.workspace = true

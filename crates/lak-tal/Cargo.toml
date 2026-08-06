@@ -1,0 +1,21 @@
+[package]
+name = "lak-tal"
+version = "0.1.0"
+edition = "2021"
+description = "Linux Agent Kernel — Tool Abstraction Layer (LLM drivers + tools)"
+
+[dependencies]
+lak-core = { path = "../lak-core" }
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+eventsource-stream.workspace = true
+http.workspace = true
+url = "2"

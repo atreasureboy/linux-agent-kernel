@@ -1,0 +1,482 @@
+syntax = "proto3";
+
+package lak;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// ── Shared: UUID is transmitted as raw bytes (16 bytes) ──
+// All LAK IDs (AgentId, TaskId, etc.) are UUIDs.
+
+// ── Enums ──
+
+enum AgentState {
+  AGENT_STATE_UNSPECIFIED = 0;
+  AGENT_STATE_CREATED = 1;
+  AGENT_STATE_INITIALIZING = 2;
+  AGENT_STATE_RUNNING = 3;
+  AGENT_STATE_IDLE = 4;
+  AGENT_STATE_BLOCKED = 5;
+  AGENT_STATE_SUSPENDED = 6;
+  AGENT_STATE_SLEEPING = 7;
+  AGENT_STATE_TERMINATED = 8;
+}
+
+enum TaskType {
+  TASK_TYPE_UNSPECIFIED = 0;
+  TASK_TYPE_REASONING = 1;
+  TASK_TYPE_TOOL_EXECUTION = 2;
+  TASK_TYPE_MEMORY_RETRIEVAL = 3;
+  TASK_TYPE_INTENT_PROCESSING = 4;
+  TASK_TYPE_IDLE_REFLECTION = 5;
+  TASK_TYPE_SYSTEM_TASK = 6;
+}
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_READY = 2;
+  TASK_STATE_RUNNING = 3;
+  TASK_STATE_BLOCKED = 4;
+  TASK_STATE_AWAITING_LLM = 5;
+  TASK_STATE_AWAITING_TOOL = 6;
+  TASK_STATE_AWAITING_INTENT = 7;
+  TASK_STATE_SUSPENDED = 8;
+  TASK_STATE_COMPLETED = 9;
+  TASK_STATE_FAILED = 10;
+  TASK_STATE_CANCELLED = 11;
+}
+
+enum IntentType {
+  INTENT_TYPE_UNSPECIFIED = 0;
+  INTENT_TYPE_QUERY = 1;
+  INTENT_TYPE_COMMAND = 2;
+  INTENT_TYPE_NOTIFICATION = 3;
+  INTENT_TYPE_REQUEST = 4;
+  INTENT_TYPE_RESPONSE = 5;
+  INTENT_TYPE_BROADCAST = 6;
+  INTENT_TYPE_ERROR = 7;
+}
+
+enum IntentTargetType {
+  INTENT_TARGET_UNSPECIFIED = 0;
+  INTENT_TARGET_BROADCAST = 1;
+  INTENT_TARGET_UNICAST = 2;
+  INTENT_TARGET_MULTICAST = 3;
+  INTENT_TARGET_BY_CAPABILITY = 4;
+  INTENT_TARGET_PUBLISH_SUBSCRIBE = 5;
+}
+
+enum MemoryTier {
+  MEMORY_TIER_UNSPECIFIED = 0;
+  MEMORY_TIER_WORKING = 1;
+  MEMORY_TIER_SHORT = 2;
+  MEMORY_TIER_LONG = 3;
+  MEMORY_TIER_ARCHIVAL = 4;
+}
+
+enum Factuality {
+  FACTUALITY_UNSPECIFIED = 0;
+  FACTUALITY_FACT = 1;
+  FACTUALITY_BELIEF = 2;
+  FACTUALITY_HEARSAY = 3;
+}
+
+enum MemorySourceType {
+  MEMORY_SOURCE_UNSPECIFIED = 0;
+  MEMORY_SOURCE_REASONING = 1;
+  MEMORY_SOURCE_OBSERVATION = 2;
+  MEMORY_SOURCE_TOOL_OUTPUT = 3;
+  MEMORY_SOURCE_DIALOGUE = 4;
+  MEMORY_SOURCE_IMPORTED = 5;
+  MEMORY_SOURCE_DERIVED = 6;
+}
+
+enum CapabilityType {
+  CAPABILITY_TYPE_UNSPECIFIED = 0;
+  CAPABILITY_TYPE_FILE_READ = 1;
+  CAPABILITY_TYPE_FILE_WRITE = 2;
+  CAPABILITY_TYPE_FILE_DELETE = 3;
+  CAPABILITY_TYPE_SHELL_EXEC = 4;
+  CAPABILITY_TYPE_SHELL_INTERACTIVE = 5;
+  CAPABILITY_TYPE_NETWORK_HTTP = 6;
+  CAPABILITY_TYPE_NETWORK_RAW = 7;
+  CAPABILITY_TYPE_DATABASE_READ = 8;
+  CAPABILITY_TYPE_DATABASE_WRITE = 9;
+  CAPABILITY_TYPE_SUBPROCESS_SPAWN = 10;
+  CAPABILITY_TYPE_SUBPROCESS_SIGNAL = 11;
+  CAPABILITY_TYPE_SYSTEM_MONITOR = 12;
+  CAPABILITY_TYPE_SYSTEM_LOG = 13;
+  CAPABILITY_TYPE_SYSTEM_CONFIG = 14;
+  CAPABILITY_TYPE_AGENT_CREATE = 15;
+  CAPABILITY_TYPE_AGENT_DESTROY = 16;
+  CAPABILITY_TYPE_AGENT_MANAGE = 17;
+  CAPABILITY_TYPE_MEMORY_SHARE = 18;
+  CAPABILITY_TYPE_INTENT_SEND = 19;
+  CAPABILITY_TYPE_INTENT_SUBSCRIBE = 20;
+  CAPABILITY_TYPE_CAPABILITY_DELEGATE = 21;
+  CAPABILITY_TYPE_CAPABILITY_REVOKE = 22;
+  CAPABILITY_TYPE_LLM_CALL = 23;
+  CAPABILITY_TYPE_LLM_STREAM = 24;
+}
+
+// ── Agent Messages ──
+
+message AgentConfig {
+  float temperature = 1;
+  uint32 max_tool_calls_per_task = 2;
+  uint64 reasoning_timeout_seconds = 3;
+  bool allow_self_reflection = 4;
+  bool require_approval_for_write = 5;
+  map<string, string> metadata = 6;
+  repeated string tags = 7;
+}
+
+message CapabilityProto {
+  CapabilityType cap_type = 1;
+  string scope = 2;
+  uint32 permissions = 3;            // bitflags for CapabilityPermission
+  string constraints_json = 4;      // JSON-encoded constraints array
+}
+
+message AgentSpec {
+  string name = 1;
+  string system_prompt = 2;
+  string model = 3;
+  uint64 max_context_tokens = 4;
+  repeated CapabilityProto initial_capabilities = 5;
+  uint64 memory_quota_bytes = 6;
+  AgentConfig config = 7;
+}
+
+message AgentStats {
+  uint64 total_tasks_completed = 1;
+  uint64 total_tasks_failed = 2;
+  uint64 total_tokens_consumed = 3;
+  uint64 total_tool_calls = 4;
+  uint64 total_tool_failures = 5;
+  float coi = 6;
+  float hallucination_rate = 7;
+  uint64 reasoning_loop_count = 8;
+  double avg_response_latency_seconds = 9;
+  uint64 capability_violations = 10;
+}
+
+message Agent {
+  bytes agent_id = 1;
+  string name = 2;
+  AgentSpec spec = 3;
+  AgentState state = 4;
+  AgentStats stats = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp last_active_at = 7;
+  optional google.protobuf.Timestamp terminated_at = 8;
+}
+
+message CreateAgentRequest {
+  AgentSpec spec = 1;
+}
+
+message CreateAgentResponse {
+  bytes agent_id = 1;
+}
+
+message DestroyAgentRequest {
+  bytes agent_id = 1;
+}
+
+message GetAgentRequest {
+  bytes agent_id = 1;
+}
+
+message GetAgentResponse {
+  Agent agent = 1;
+}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+}
+
+message PauseAgentRequest {
+  bytes agent_id = 1;
+}
+
+message ResumeAgentRequest {
+  bytes agent_id = 1;
+}
+
+// ── Task Messages ──
+
+message CognitivePriority {
+  uint32 urgency = 1;
+  uint32 importance = 2;
+  uint32 context_affinity = 3;
+}
+
+message TaskContent {
+  string natural_language = 1;
+  optional string structured_schema_json = 2;
+  repeated bytes memory_references = 3;
+}
+
+message TaskStats {
+  uint64 tokens_consumed = 1;
+  uint32 tool_calls_made = 2;
+  uint32 reasoning_steps = 3;
+  uint32 memory_retrievals = 4;
+  optional google.protobuf.Timestamp started_at = 5;
+  optional google.protobuf.Timestamp completed_at = 6;
+  uint32 llm_calls = 7;
+  uint64 total_wall_time_ms = 8;
+}
+
+message TaskErrorProto {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message CognitiveTask {
+  bytes task_id = 1;
+  bytes agent_id = 2;
+  TaskType task_type = 3;
+  CognitivePriority priority = 4;
+  TaskState state = 5;
+  TaskContent content = 6;
+  optional google.protobuf.Timestamp deadline = 7;
+  repeated bytes dependencies = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  map<string, string> metadata = 11;
+  TaskStats stats = 12;
+  optional string blocked_reason = 13;     // set when state == BLOCKED
+  optional TaskErrorProto error = 14;      // set when state == FAILED
+}
+
+message SubmitTaskRequest {
+  CognitiveTask task = 1;
+}
+
+message SubmitTaskResponse {
+  bytes task_id = 1;
+}
+
+message CancelTaskRequest {
+  bytes task_id = 1;
+}
+
+message GetTaskRequest {
+  bytes task_id = 1;
+}
+
+message GetTaskResponse {
+  CognitiveTask task = 1;
+}
+
+// ── Intent Messages ──
+
+message IntentTarget {
+  IntentTargetType target_type = 1;
+  repeated bytes agent_ids = 2;        // for unicast / multicast
+  map<string, string> filters = 3;     // for by-capability / pub-sub
+}
+
+message IntentContent {
+  string natural_language = 1;
+  optional string structured_json = 2;
+  map<string, string> headers = 3;
+}
+
+message IntentMessage {
+  bytes intent_id = 1;
+  bytes sender_id = 2;
+  IntentTarget target = 3;
+  IntentType intent_type = 4;
+  IntentContent content = 5;
+  CognitivePriority priority = 6;
+  optional bytes reply_to_intent_id = 7;
+  bool requires_ack = 8;
+  google.protobuf.Timestamp created_at = 9;
+  optional google.protobuf.Timestamp expires_at = 10;
+}
+
+message IntentSubscription {
+  repeated IntentType intent_types = 1;
+  repeated bytes from_agents = 2;      // empty = any agent
+  map<string, string> topic_filters = 3;
+  optional uint64 timeout_ms = 4;
+}
+
+message SendIntentRequest {
+  IntentMessage intent = 1;
+}
+
+message SendIntentResponse {
+  bytes intent_id = 1;
+}
+
+message AwaitIntentRequest {
+  bytes agent_id = 1;
+  IntentSubscription subscription = 2;
+}
+
+message AwaitIntentResponse {
+  IntentMessage intent = 1;
+}
+
+// ── Memory Messages ──
+
+message MemoryContentProto {
+  string raw_text = 1;
+  optional string embedding_json = 2;   // float array as JSON string
+  map<string, string> tags = 3;
+}
+
+message MemoryMetadataProto {
+  MemorySourceType source = 1;
+  Factuality factuality = 2;
+  optional float confidence = 3;        // 0.0–1.0
+  double importance_score = 4;
+  repeated string relation_ids = 5;     // UUID strings of related memories
+}
+
+message MemoryChunk {
+  bytes chunk_id = 1;
+  bytes agent_id = 2;
+  MemoryTier tier = 3;
+  MemoryContentProto content = 4;
+  MemoryMetadataProto metadata = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp last_accessed_at = 7;
+  uint32 access_count = 8;
+}
+
+message StoreMemoryRequest {
+  bytes agent_id = 1;
+  MemoryChunk chunk = 2;
+}
+
+message QueryMemoryRequest {
+  bytes agent_id = 1;
+  string query = 2;
+  uint32 top_k = 3;
+}
+
+message QueryMemoryResponse {
+  repeated MemoryChunk chunks = 1;
+}
+
+message ForgetMemoryRequest {
+  bytes agent_id = 1;
+  bytes chunk_id = 2;
+}
+
+message ForgetMemoryResponse {
+  bool found = 1;
+}
+
+// ── Capability Messages ──
+
+message CapabilityConstraintProto {
+  oneof constraint {
+    string max_file_path = 1;
+    uint64 max_file_size_bytes = 2;
+    string time_window_hours = 3;        // JSON: [start_hour, end_hour] e.g. "[9,17]"
+    uint32 max_invocations = 4;
+    string network_allowlist_json = 5;   // JSON array of allowed hosts
+  }
+}
+
+message CapabilityCertificate {
+  bytes cert_id = 1;
+  bytes owner_id = 2;
+  repeated CapabilityProto capabilities = 3;
+  repeated CapabilityConstraintProto constraints = 4;
+  google.protobuf.Timestamp issued_at = 5;
+  optional google.protobuf.Timestamp expires_at = 6;
+  optional bytes parent_cert_id = 7;     // for delegated certs
+  optional uint32 max_depth = 8;         // max delegation depth
+}
+
+message GrantCapabilityRequest {
+  bytes from_agent = 1;
+  bytes to_agent = 2;
+  CapabilityProto capability = 3;
+}
+
+message GrantCapabilityResponse {
+  bytes cert_id = 1;
+}
+
+message RevokeCapabilityRequest {
+  bytes cert_id = 1;
+}
+
+message DelegateCapabilityRequest {
+  bytes from_agent = 1;
+  bytes to_agent = 2;
+  CapabilityProto requirement = 3;
+  optional string new_scope = 4;
+  optional uint32 new_permissions = 5;
+}
+
+message DelegateCapabilityResponse {
+  bytes cert_id = 1;
+}
+
+message GetCapabilitiesRequest {
+  bytes agent_id = 1;
+}
+
+message GetCapabilitiesResponse {
+  CapabilityCertificate certificate = 1;
+}
+
+// ── System Messages ──
+
+message SystemStatus {
+  uint32 active_agents = 1;
+  uint32 max_agents = 2;
+  uint32 pending_tasks = 3;
+  uint64 completed_tasks_total = 4;
+  uint64 total_tokens_consumed = 5;
+  float average_coi = 6;
+  float scheduler_load = 7;
+  uint64 uptime_seconds = 8;
+}
+
+// ── Service Definition ──
+
+service AgentKernel {
+  // Agent lifecycle
+  rpc CreateAgent(CreateAgentRequest) returns (CreateAgentResponse);
+  rpc DestroyAgent(DestroyAgentRequest) returns (google.protobuf.Empty);
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
+  rpc ListAgents(google.protobuf.Empty) returns (ListAgentsResponse);
+  rpc PauseAgent(PauseAgentRequest) returns (google.protobuf.Empty);
+  rpc ResumeAgent(ResumeAgentRequest) returns (google.protobuf.Empty);
+
+  // Cognitive tasks
+  rpc SubmitTask(SubmitTaskRequest) returns (SubmitTaskResponse);
+  rpc CancelTask(CancelTaskRequest) returns (google.protobuf.Empty);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+
+  // Intent routing
+  rpc SendIntent(SendIntentRequest) returns (SendIntentResponse);
+  rpc AwaitIntent(AwaitIntentRequest) returns (AwaitIntentResponse);
+
+  // Semantic memory
+  rpc StoreMemory(StoreMemoryRequest) returns (google.protobuf.Empty);
+  rpc QueryMemory(QueryMemoryRequest) returns (QueryMemoryResponse);
+  rpc ForgetMemory(ForgetMemoryRequest) returns (ForgetMemoryResponse);
+
+  // Capability management
+  rpc GrantCapability(GrantCapabilityRequest) returns (GrantCapabilityResponse);
+  rpc RevokeCapability(RevokeCapabilityRequest) returns (google.protobuf.Empty);
+  rpc DelegateCapability(DelegateCapabilityRequest) returns (DelegateCapabilityResponse);
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // System
+  rpc GetSystemStatus(google.protobuf.Empty) returns (SystemStatus);
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+}

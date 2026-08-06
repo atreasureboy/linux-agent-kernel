@@ -1,0 +1,26 @@
+[package]
+name = "lakd"
+version = "0.1.0"
+edition = "2021"
+description = "Linux Agent Kernel — Daemon (gRPC server + main loop)"
+
+[[bin]]
+name = "lakd"
+path = "src/main.rs"
+
+[dependencies]
+lak-core = { path = "../lak-core" }
+lak-proto = { path = "../lak-proto" }
+lak-services = { path = "../lak-services" }
+lak-tal = { path = "../lak-tal" }
+lak-are = { path = "../lak-are" }
+chrono.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+uuid.workspace = true

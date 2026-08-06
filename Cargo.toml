@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lak-core",
+    "crates/lak-proto",
+    "crates/lak-tal",
+    "crates/lak-services",
+    "crates/lak-are",
+    "crates/lakd",
+]
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+
+# 工具库
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
+thiserror = "2"
+anyhow = "1"
+bitflags = "2"
+glob = "0.3"
+dashmap = "6"
+parking_lot = "0.12"
+
+# HTTP / gRPC
+reqwest = { version = "0.12", features = ["json", "stream"] }
+eventsource-stream = "0.2"
+http = "1"
+
+# 测试
+tokio-test = "0.4"
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"

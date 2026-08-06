@@ -1,0 +1,20 @@
+[package]
+name = "lak-are"
+version = "0.1.0"
+edition = "2021"
+description = "Linux Agent Kernel — Agent Runtime Environment"
+
+[dependencies]
+lak-core = { path = "../lak-core" }
+lak-services = { path = "../lak-services" }
+lak-tal = { path = "../lak-tal" }
+async-trait.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+dashmap.workspace = true
+futures.workspace = true
