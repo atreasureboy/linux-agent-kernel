@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use lak_tal::llm::ToolDefinition;
 use lak_tal::tools::Tool;
 
 /// Registry of all available tools
@@ -40,6 +41,18 @@ impl ToolRegistry {
     /// Number of registered tools
     pub fn count(&self) -> usize {
         self.tools.len()
+    }
+
+    /// Build LLM tool definitions from the registry (for use in LLM requests)
+    pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools
+            .values()
+            .map(|t| ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect()
     }
 }
 

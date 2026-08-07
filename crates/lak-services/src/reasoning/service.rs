@@ -9,7 +9,7 @@ use futures::StreamExt;
 use lak_core::types::ids::TaskId;
 use lak_core::types::memory::{MemoryChunk, MemoryTier};
 use lak_core::types::task::{CognitiveTask, TaskContent, TaskType};
-use lak_tal::llm::{ChatMessage, ChatRole, LLMDriver, LLMRequest, LLMStreamEvent};
+use lak_tal::llm::{ChatMessage, ChatRole, LLMDriver, LLMRequest, LLMStreamEvent, ToolDefinition};
 
 use super::model_router::ModelRouter;
 
@@ -24,6 +24,15 @@ pub struct PipelineResult {
     pub reasoning_steps: u32,
     pub llm_calls: u32,
     pub total_wall_time_ms: u64,
+}
+
+/// Result of a single raw LLM call (used in multi-turn tool loops)
+#[derive(Debug, Clone)]
+pub struct LlmCallResult {
+    pub content: String,
+    pub tool_calls: Vec<lak_tal::llm::ToolCallRequest>,
+    pub tokens_used: u64,
+    pub finish_reason: String,
 }
 
 /// Orchestrates LLM invocations through the 5-stage cognitive pipeline
@@ -47,6 +56,64 @@ impl ReasoningService {
 
     pub fn driver_count(&self) -> usize {
         self.drivers.len()
+    }
+
+    /// Single LLM streaming call with messages and optional tools.
+    ///
+    /// Used directly by the execution loop for multi-turn tool calling
+    /// (where messages accumulate across tool→LLM rounds).
+    pub async fn call_llm_with_messages(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDefinition>>,
+        task: &CognitiveTask,
+    ) -> Result<LlmCallResult, String> {
+        let driver = self
+            .router
+            .select_driver(&self.drivers, task)
+            .ok_or("No available LLM driver")?;
+
+        let llm_request = LLMRequest {
+            messages,
+            tools,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+
+        let mut stream = driver
+            .generate_stream(llm_request)
+            .await
+            .map_err(|e| format!("LLM error: {e}"))?;
+
+        let mut content = String::new();
+        let mut tool_calls = Vec::new();
+        let mut tokens = 0u64;
+        let mut finish_reason = String::from("stop");
+
+        while let Some(event) = stream.next().await {
+            match event.map_err(|e| format!("stream error: {e}"))? {
+                LLMStreamEvent::Token(t) => content.push_str(&t),
+                LLMStreamEvent::ToolCall(tc) => tool_calls.push(tc),
+                LLMStreamEvent::Thinking(t) => {
+                    tracing::debug!(thinking = %t, "LLM reasoning");
+                }
+                LLMStreamEvent::Done(resp) => {
+                    tokens = resp.tokens_used;
+                    finish_reason = resp.finish_reason;
+                    break;
+                }
+                LLMStreamEvent::Error(e) => {
+                    return Err(format!("LLM stream error: {e}"));
+                }
+            }
+        }
+
+        Ok(LlmCallResult {
+            content,
+            tool_calls,
+            tokens_used: tokens,
+            finish_reason,
+        })
     }
 
     /// Execute the full 5-stage cognitive pipeline for a task.

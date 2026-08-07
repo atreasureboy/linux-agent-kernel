@@ -25,7 +25,10 @@ use lak_core::types::ids::{AgentId, CapabilityCertId, IntentId, MemoryChunkId, T
 use lak_core::types::intent::{IntentMessage, IntentSubscription};
 use lak_core::types::memory::MemoryChunk;
 use lak_core::types::task::{CognitiveTask, TaskState};
-use lak_tal::tools::{FileReadTool, HttpGetTool, ShellCmdTool, ToolContext, ToolResult};
+use lak_tal::llm::{ChatMessage, ChatRole};
+use lak_tal::tools::{
+    FileReadTool, HttpGetTool, SandboxConfig, ShellCmdTool, ToolContext, ToolResult,
+};
 
 use super::intent_router::IntentRouter;
 use super::journal::{CognitiveJournal, JournalOperation};
@@ -182,46 +185,172 @@ impl KernelService {
                     continue;
                 };
 
-                // ── Phase 3: run cognitive pipeline ─────────
-                let driver_count = {
-                    let s = this.state.read().await;
-                    s.reasoning.driver_count()
-                };
+                // ── Phase 3: multi-turn LLM + tool loop ──────
+                let pipeline_start = std::time::Instant::now();
+                let (pipeline_result, all_tool_calls) = 'pipeline: {
+                    let (system_prompt, max_rounds, tool_defs) = {
+                        let s = this.state.read().await;
+                        let sp = s
+                            .agents
+                            .get(&agent_id)
+                            .map(|r| r.agent.spec.system_prompt.clone())
+                            .unwrap_or_else(|| {
+                                "You are a Linux Agent Kernel (LAK) cognitive agent.".to_string()
+                            });
+                        let rounds = s
+                            .agents
+                            .get(&agent_id)
+                            .map(|r| r.agent.spec.config.max_tool_calls_per_task as usize)
+                            .unwrap_or(5);
+                        let defs = s.tools.tool_definitions();
+                        (sp, rounds, defs)
+                    };
 
-                let result = if driver_count == 0 {
-                    Err("No LLM driver registered; task cannot be executed".to_string())
-                } else {
-                    let s = this.state.read().await;
-                    s.reasoning
-                        .execute_pipeline(task_ref, &context_str, &memories)
-                        .await
+                    let mut messages = vec![
+                        ChatMessage {
+                            role: ChatRole::System,
+                            content: system_prompt,
+                        },
+                        ChatMessage {
+                            role: ChatRole::User,
+                            content: {
+                                let mut user_msg = format!(
+                                    "Context:\n{}\n\nTask:\n{}",
+                                    context_str, task_ref.content.natural_language
+                                );
+                                if !memories.is_empty() {
+                                    user_msg.push_str("\n\nRelevant Memories:");
+                                    for (i, mem) in memories.iter().enumerate() {
+                                        user_msg.push_str(&format!(
+                                            "\n  [{i}] {}",
+                                            mem.content.raw_text
+                                        ));
+                                    }
+                                }
+                                user_msg
+                                    .push_str("\n\nPlease reason through this task step by step.");
+                                user_msg
+                            },
+                        },
+                    ];
+
+                    let tools_for_llm = if tool_defs.is_empty() {
+                        None
+                    } else {
+                        Some(tool_defs.clone())
+                    };
+
+                    let mut final_response = String::new();
+                    let mut accumulated_tool_calls: Vec<lak_tal::llm::ToolCallRequest> = Vec::new();
+                    let mut total_tokens = 0u64;
+                    let mut llm_call_count = 0u32;
+                    let safety_cap = max_rounds.min(10);
+                    let mut round = 0;
+
+                    loop {
+                        if round >= safety_cap {
+                            break 'pipeline (
+                                Ok((final_response, total_tokens, llm_call_count)),
+                                accumulated_tool_calls,
+                            );
+                        }
+                        round += 1;
+
+                        let llm_result = {
+                            let s = this.state.read().await;
+                            s.reasoning
+                                .call_llm_with_messages(
+                                    messages.clone(),
+                                    tools_for_llm.clone(),
+                                    task_ref,
+                                )
+                                .await
+                        };
+
+                        match llm_result {
+                            Err(e) => {
+                                break 'pipeline (
+                                    Err(format!("LLM error: {e}")),
+                                    accumulated_tool_calls,
+                                );
+                            }
+                            Ok(llm) => {
+                                total_tokens += llm.tokens_used;
+                                llm_call_count += 1;
+                                final_response = llm.content.clone();
+
+                                if llm.tool_calls.is_empty() {
+                                    break 'pipeline (
+                                        Ok((final_response, total_tokens, llm_call_count)),
+                                        accumulated_tool_calls,
+                                    );
+                                }
+
+                                messages.push(ChatMessage {
+                                    role: ChatRole::Assistant,
+                                    content: llm.content,
+                                });
+
+                                for tc in &llm.tool_calls {
+                                    accumulated_tool_calls.push(tc.clone());
+
+                                    let tc_context = ToolContext {
+                                        agent_id,
+                                        task_id,
+                                        sandbox: SandboxConfig::default(),
+                                    };
+
+                                    let exec = this
+                                        .execute_tool(
+                                            agent_id,
+                                            &tc.name,
+                                            tc.arguments.clone(),
+                                            tc_context,
+                                        )
+                                        .await;
+
+                                    let tool_text = match exec {
+                                        Ok((result, _audit)) => {
+                                            serde_json::to_string(&result.output)
+                                                .unwrap_or_else(|_| "{}".into())
+                                        }
+                                        Err(e) => format!("Tool error: {e}"),
+                                    };
+                                    messages.push(ChatMessage {
+                                        role: ChatRole::Tool,
+                                        content: tool_text,
+                                    });
+                                }
+                            }
+                        }
+                    }
                 };
 
                 // ── Phase 4: write back results ─────────────
                 {
                     let mut s = this.state.write().await;
+                    let wall_ms = pipeline_start.elapsed().as_millis() as u64;
 
-                    match result {
-                        Ok(pipeline) => {
-                            s.total_tokens_consumed += pipeline.tokens_used;
+                    match pipeline_result {
+                        Ok((response, tokens, llm_calls)) => {
+                            s.total_tokens_consumed += tokens;
                             s.completed_tasks_total += 1;
 
                             if let Some(t) = s.tasks.get_mut(&task_id) {
                                 t.state = TaskState::Completed;
                                 t.updated_at = Utc::now();
-                                t.stats.tokens_consumed = pipeline.tokens_used;
-                                t.stats.tool_calls_made = pipeline.tool_calls.len() as u32;
-                                t.stats.reasoning_steps = pipeline.reasoning_steps;
-                                t.stats.llm_calls = pipeline.llm_calls;
-                                t.stats.total_wall_time_ms = pipeline.total_wall_time_ms;
+                                t.stats.tokens_consumed = tokens;
+                                t.stats.tool_calls_made = all_tool_calls.len() as u32;
+                                t.stats.llm_calls = llm_calls;
+                                t.stats.total_wall_time_ms = wall_ms;
                                 t.stats.completed_at = Some(Utc::now());
                             }
 
                             if let Some(runtime) = s.agents.get_mut(&agent_id) {
                                 runtime.process.record_task_completion(
-                                    pipeline.tokens_used,
-                                    pipeline.tool_calls.len() as u32,
-                                    pipeline.total_wall_time_ms,
+                                    tokens,
+                                    all_tool_calls.len() as u32,
+                                    wall_ms,
                                 );
                                 runtime.process.recalculate_coi();
                                 runtime.agent.state = AgentState::Idle;
@@ -236,8 +365,10 @@ impl KernelService {
 
                             tracing::info!(
                                 task_id = %task_id,
-                                tokens = pipeline.tokens_used,
-                                wall_ms = pipeline.total_wall_time_ms,
+                                tokens = tokens,
+                                wall_ms = wall_ms,
+                                tool_calls = all_tool_calls.len(),
+                                response_len = response.len(),
                                 "Task completed"
                             );
                         }

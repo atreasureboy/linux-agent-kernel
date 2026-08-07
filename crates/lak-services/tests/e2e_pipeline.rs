@@ -167,7 +167,10 @@ async fn test_e2e_task_fails_without_driver() {
         let t = kernel.get_task(task_id).await.unwrap();
         match t.state {
             TaskState::Failed(e) => {
-                assert!(e.message.contains("No LLM driver"));
+                assert!(
+                    e.message.contains("No available LLM driver"),
+                    "expected 'No available LLM driver', got: {e:?}"
+                );
                 break;
             }
             TaskState::Completed => panic!("Task should not complete without a driver"),
