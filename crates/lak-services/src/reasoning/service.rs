@@ -58,24 +58,59 @@ impl ReasoningService {
         self.drivers.len()
     }
 
-    /// Single LLM streaming call with messages and optional tools.
+    /// Single LLM streaming call with automatic driver fallback.
     ///
-    /// Used directly by the execution loop for multi-turn tool calling
-    /// (where messages accumulate across tool→LLM rounds).
+    /// If the top-ranked driver fails, the next-best driver is tried, up
+    /// to the total number of registered drivers. All drivers exhausted →
+    /// the last error is returned.
     pub async fn call_llm_with_messages(
         &self,
         messages: Vec<ChatMessage>,
         tools: Option<Vec<ToolDefinition>>,
         task: &CognitiveTask,
     ) -> Result<LlmCallResult, String> {
-        let driver = self
-            .router
-            .select_driver(&self.drivers, task)
-            .ok_or("No available LLM driver")?;
+        // Score and rank all drivers
+        let mut ranked: Vec<(f64, &Arc<dyn LLMDriver>)> = self
+            .drivers
+            .iter()
+            .map(|d| (self.router.score_driver(d, task), d))
+            .collect();
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
+        if ranked.is_empty() {
+            return Err("No LLM driver registered; task cannot be executed".to_string());
+        }
+
+        let mut last_error = String::new();
+        for (_score, driver) in &ranked {
+            match self.try_single_driver(driver, &messages, &tools).await {
+                Ok(result) => {
+                    return Ok(result);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        driver = %driver.name(),
+                        error = %e,
+                        "LLM driver failed, trying next"
+                    );
+                    last_error = e;
+                }
+            }
+        }
+
+        Err(format!("All drivers exhausted. Last error: {last_error}"))
+    }
+
+    /// Attempt one LLM call with a specific driver.
+    async fn try_single_driver(
+        &self,
+        driver: &Arc<dyn LLMDriver>,
+        messages: &[ChatMessage],
+        tools: &Option<Vec<ToolDefinition>>,
+    ) -> Result<LlmCallResult, String> {
         let llm_request = LLMRequest {
-            messages,
-            tools,
+            messages: messages.to_vec(),
+            tools: tools.clone(),
             max_tokens: Some(4096),
             temperature: Some(0.7),
         };
@@ -94,9 +129,7 @@ impl ReasoningService {
             match event.map_err(|e| format!("stream error: {e}"))? {
                 LLMStreamEvent::Token(t) => content.push_str(&t),
                 LLMStreamEvent::ToolCall(tc) => tool_calls.push(tc),
-                LLMStreamEvent::Thinking(t) => {
-                    tracing::debug!(thinking = %t, "LLM reasoning");
-                }
+                LLMStreamEvent::Thinking(_t) => {}
                 LLMStreamEvent::Done(resp) => {
                     tokens = resp.tokens_used;
                     finish_reason = resp.finish_reason;
@@ -467,5 +500,164 @@ mod tests {
         assert!(!result.is_empty());
         // Config-related memory should be top
         assert!(result[0].content.raw_text.contains("config"));
+    }
+
+    fn make_test_task() -> CognitiveTask {
+        CognitiveTask {
+            task_id: TaskId::new(),
+            agent_id: lak_core::types::ids::AgentId::new(),
+            task_type: TaskType::Reasoning,
+            priority: lak_core::types::task::CognitivePriority::normal(),
+            state: lak_core::types::task::TaskState::Pending,
+            content: lak_core::types::task::TaskContent {
+                natural_language: "test task".into(),
+                structured_schema: None,
+                memory_references: vec![],
+            },
+            deadline: None,
+            dependencies: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            metadata: std::collections::HashMap::new(),
+            stats: lak_core::types::task::TaskStats::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_driver_retry_falls_through_to_healthy_driver() {
+        use async_trait::async_trait;
+        use futures::stream::BoxStream;
+        use lak_tal::llm::{LLMDriver, LLMError, LLMRequest, LLMResponse, LLMStreamEvent};
+        use std::sync::Arc;
+
+        // Healthy driver — responds instantly
+        #[derive(Debug)]
+        struct HealthyDriver;
+        #[async_trait]
+        impl LLMDriver for HealthyDriver {
+            fn name(&self) -> &str {
+                "healthy"
+            }
+            async fn generate_stream(
+                &self,
+                _req: LLMRequest,
+            ) -> Result<BoxStream<'static, Result<LLMStreamEvent, LLMError>>, LLMError>
+            {
+                Ok(Box::pin(futures::stream::iter(vec![
+                    Ok(LLMStreamEvent::Token("ok".into())),
+                    Ok(LLMStreamEvent::Done(LLMResponse {
+                        content: String::new(),
+                        tool_calls: vec![],
+                        tokens_used: 1,
+                        finish_reason: "stop".into(),
+                    })),
+                ])))
+            }
+            async fn count_tokens(&self, t: &str) -> Result<usize, LLMError> {
+                Ok(t.len())
+            }
+            async fn health_check(&self) -> Result<bool, LLMError> {
+                Ok(true)
+            }
+            fn cost_per_1k_tokens(&self, _: bool) -> f64 {
+                0.0
+            }
+        }
+
+        // Failing driver — always errors
+        #[derive(Debug)]
+        struct FailingDriver;
+        #[async_trait]
+        impl LLMDriver for FailingDriver {
+            fn name(&self) -> &str {
+                "failing"
+            }
+            async fn generate_stream(
+                &self,
+                _req: LLMRequest,
+            ) -> Result<BoxStream<'static, Result<LLMStreamEvent, LLMError>>, LLMError>
+            {
+                Err(LLMError::NetworkError("simulated failure".into()))
+            }
+            async fn count_tokens(&self, t: &str) -> Result<usize, LLMError> {
+                Ok(t.len())
+            }
+            async fn health_check(&self) -> Result<bool, LLMError> {
+                Ok(false)
+            }
+            fn cost_per_1k_tokens(&self, _: bool) -> f64 {
+                0.0
+            }
+        }
+
+        let mut service = ReasoningService::new();
+        service.add_driver(Arc::new(FailingDriver)); // ranked first
+        service.add_driver(Arc::new(HealthyDriver)); // fallback
+
+        let task = make_test_task();
+        let result = service
+            .call_llm_with_messages(
+                vec![ChatMessage {
+                    role: ChatRole::User,
+                    content: "hello".into(),
+                }],
+                None,
+                &task,
+            )
+            .await;
+
+        assert!(result.is_ok(), "Should fall through to healthy driver");
+        assert_eq!(result.unwrap().content, "ok");
+    }
+
+    #[tokio::test]
+    async fn test_all_drivers_fail_returns_error() {
+        use async_trait::async_trait;
+        use futures::stream::BoxStream;
+        use lak_tal::llm::{LLMDriver, LLMError, LLMRequest, LLMStreamEvent};
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct AlwaysFail;
+        #[async_trait]
+        impl LLMDriver for AlwaysFail {
+            fn name(&self) -> &str {
+                "always-fail"
+            }
+            async fn generate_stream(
+                &self,
+                _req: LLMRequest,
+            ) -> Result<BoxStream<'static, Result<LLMStreamEvent, LLMError>>, LLMError>
+            {
+                Err(LLMError::NetworkError("down".into()))
+            }
+            async fn count_tokens(&self, t: &str) -> Result<usize, LLMError> {
+                Ok(t.len())
+            }
+            async fn health_check(&self) -> Result<bool, LLMError> {
+                Ok(false)
+            }
+            fn cost_per_1k_tokens(&self, _: bool) -> f64 {
+                0.0
+            }
+        }
+
+        let mut service = ReasoningService::new();
+        service.add_driver(Arc::new(AlwaysFail));
+
+        let task = make_test_task();
+        let result = service
+            .call_llm_with_messages(
+                vec![ChatMessage {
+                    role: ChatRole::User,
+                    content: "hi".into(),
+                }],
+                None,
+                &task,
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("All drivers exhausted"));
     }
 }

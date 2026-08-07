@@ -39,7 +39,7 @@ impl ModelRouter {
         let mut candidates: Vec<(&Arc<dyn LLMDriver>, f64)> = drivers
             .iter()
             .map(|d| {
-                let score = self.score_driver_for_task(d, task);
+                let score = self.score_driver(d, task);
                 (d, score)
             })
             .collect();
@@ -52,7 +52,8 @@ impl ModelRouter {
     }
 
     /// Score a driver's suitability for a task (higher = better fit).
-    fn score_driver_for_task(&self, driver: &Arc<dyn LLMDriver>, task: &CognitiveTask) -> f64 {
+    /// Public so that the reasoning service can rank drivers for retry logic.
+    pub fn score_driver(&self, driver: &Arc<dyn LLMDriver>, task: &CognitiveTask) -> f64 {
         let name = driver.name().to_lowercase();
         let mut score = 50.0; // Base score
 

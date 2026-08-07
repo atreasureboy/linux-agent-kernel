@@ -168,8 +168,10 @@ async fn test_e2e_task_fails_without_driver() {
         match t.state {
             TaskState::Failed(e) => {
                 assert!(
-                    e.message.contains("No available LLM driver"),
-                    "expected 'No available LLM driver', got: {e:?}"
+                    e.message.contains("No LLM driver registered")
+                        || e.message.contains("No available LLM driver")
+                        || e.message.contains("All drivers exhausted"),
+                    "expected a no-driver error, got: {e:?}"
                 );
                 break;
             }
