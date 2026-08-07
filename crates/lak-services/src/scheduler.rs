@@ -162,7 +162,13 @@ impl CognitiveScheduler {
         }
 
         let scheduled = self.ready_queue.pop()?;
-        let quantum = ThinkingQuantum::for_priority(&scheduled.task.priority);
+        let mut quantum = ThinkingQuantum::for_priority(&scheduled.task.priority);
+        // Apply the configured default as a minimum floor so that even
+        // the lowest-priority tasks get a reasonable slice.
+        let dq = &self.default_quantum;
+        quantum.max_tokens = quantum.max_tokens.max(dq.max_tokens);
+        quantum.max_tool_calls = quantum.max_tool_calls.max(dq.max_tool_calls);
+        quantum.max_wall_clock_ms = quantum.max_wall_clock_ms.max(dq.max_wall_clock_ms);
         self.running_count += 1;
 
         Some((scheduled.task, quantum))

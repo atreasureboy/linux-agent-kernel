@@ -8,6 +8,7 @@
 //! - Memory tier promotion/demotion (Working→ShortTerm→LongTerm→Archival)
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use lak_core::types::ids::{AgentId, MemoryChunkId};
@@ -452,6 +453,35 @@ impl MemoryService {
 impl Default for MemoryService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Pluggable backend adapter ────────────────────────────────────
+
+/// Allow the in-memory `MemoryService` to satisfy the async `MemoryStore`
+/// trait when wrapped in a tokio Mutex.
+#[async_trait::async_trait]
+impl crate::memory::store::MemoryStore for Arc<tokio::sync::Mutex<MemoryService>> {
+    async fn store(&self, agent_id: AgentId, chunk: MemoryChunk) -> Result<(), String> {
+        self.lock().await.store(agent_id, chunk);
+        Ok(())
+    }
+
+    async fn query(
+        &self,
+        agent_id: AgentId,
+        query_str: &str,
+        top_k: usize,
+    ) -> Result<Vec<MemoryChunk>, String> {
+        Ok(self.lock().await.query(agent_id, query_str, top_k))
+    }
+
+    async fn forget(&self, agent_id: AgentId, chunk_id: MemoryChunkId) -> Result<(), String> {
+        if self.lock().await.forget(agent_id, chunk_id) {
+            Ok(())
+        } else {
+            Err("chunk not found".into())
+        }
     }
 }
 

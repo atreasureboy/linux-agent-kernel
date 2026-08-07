@@ -50,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Register LLM drivers from the environment
     register_llm_drivers(&kernel).await;
 
+    // Start the cognitive execution loop (background task)
+    kernel.start();
+
     tracing::info!("[LAK] Kernel initialized. Building gRPC server...");
 
     // Create the gRPC server bridge (upcast to the trait object)

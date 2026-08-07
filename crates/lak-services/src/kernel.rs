@@ -5,7 +5,9 @@
 //! agent/task/intent/capability state.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -74,6 +76,7 @@ struct KernelState {
 pub struct KernelService {
     state: RwLock<KernelState>,
     max_agents: u32,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl KernelService {
@@ -101,6 +104,7 @@ impl KernelService {
                 total_tokens_consumed: 0,
             }),
             max_agents: 1000,
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -108,6 +112,174 @@ impl KernelService {
     pub fn with_max_agents(mut self, max: u32) -> Self {
         self.max_agents = max;
         self
+    }
+
+    /// Start the cognitive execution loop as a background task.
+    ///
+    /// The loop dequeues tasks from the scheduler, runs the 5-stage
+    /// cognitive pipeline, updates task/agent state, and records
+    /// journal transitions. Call once after registering LLM drivers
+    /// and before accepting gRPC traffic.
+    pub fn start(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        let poll_interval = Duration::from_millis(100);
+
+        tokio::spawn(async move {
+            tracing::info!("[KernelService] Execution loop started");
+
+            while !this.shutdown.load(Ordering::Relaxed) {
+                // ── Phase 1: dequeue ────────────────────────
+                let work = {
+                    let mut s = this.state.write().await;
+                    s.scheduler.schedule_next()
+                };
+
+                let Some((task, _quantum)) = work else {
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                };
+
+                let task_id = task.task_id;
+                let agent_id = task.agent_id;
+
+                tracing::debug!(
+                    task_id = %task_id,
+                    agent_id = %agent_id,
+                    "Execution loop: picked task"
+                );
+
+                // ── Phase 2: prepare context & memory ───────
+                let (context_str, memories, snapshot_task) = {
+                    let mut s = this.state.write().await;
+
+                    let from = s.tasks.get(&task_id).map(|t| t.state.clone());
+                    if let Some(t) = s.tasks.get_mut(&task_id) {
+                        t.state = TaskState::Running;
+                        t.updated_at = Utc::now();
+                        if t.stats.started_at.is_none() {
+                            t.stats.started_at = Some(Utc::now());
+                        }
+                    }
+                    if let Some(from) = from {
+                        s.journal
+                            .record_transition(task_id, agent_id, from, TaskState::Running);
+                    }
+
+                    let ctx = s
+                        .agents
+                        .get(&agent_id)
+                        .map(|r| r.process.build_context_string())
+                        .unwrap_or_default();
+
+                    let mems = s.memory.query(agent_id, &task.content.natural_language, 10);
+
+                    let snap = s.tasks.get(&task_id).cloned();
+                    (ctx, mems, snap)
+                };
+
+                let Some(ref task_ref) = snapshot_task else {
+                    tracing::warn!(task_id = %task_id, "Task vanished, skipping");
+                    continue;
+                };
+
+                // ── Phase 3: run cognitive pipeline ─────────
+                let driver_count = {
+                    let s = this.state.read().await;
+                    s.reasoning.driver_count()
+                };
+
+                let result = if driver_count == 0 {
+                    Err("No LLM driver registered; task cannot be executed".to_string())
+                } else {
+                    let s = this.state.read().await;
+                    s.reasoning
+                        .execute_pipeline(task_ref, &context_str, &memories)
+                        .await
+                };
+
+                // ── Phase 4: write back results ─────────────
+                {
+                    let mut s = this.state.write().await;
+
+                    match result {
+                        Ok(pipeline) => {
+                            s.total_tokens_consumed += pipeline.tokens_used;
+                            s.completed_tasks_total += 1;
+
+                            if let Some(t) = s.tasks.get_mut(&task_id) {
+                                t.state = TaskState::Completed;
+                                t.updated_at = Utc::now();
+                                t.stats.tokens_consumed = pipeline.tokens_used;
+                                t.stats.tool_calls_made = pipeline.tool_calls.len() as u32;
+                                t.stats.reasoning_steps = pipeline.reasoning_steps;
+                                t.stats.llm_calls = pipeline.llm_calls;
+                                t.stats.total_wall_time_ms = pipeline.total_wall_time_ms;
+                                t.stats.completed_at = Some(Utc::now());
+                            }
+
+                            if let Some(runtime) = s.agents.get_mut(&agent_id) {
+                                runtime.process.record_task_completion(
+                                    pipeline.tokens_used,
+                                    pipeline.tool_calls.len() as u32,
+                                    pipeline.total_wall_time_ms,
+                                );
+                                runtime.process.recalculate_coi();
+                                runtime.agent.state = AgentState::Idle;
+                            }
+
+                            s.journal.record_transition(
+                                task_id,
+                                agent_id,
+                                TaskState::Running,
+                                TaskState::Completed,
+                            );
+
+                            tracing::info!(
+                                task_id = %task_id,
+                                tokens = pipeline.tokens_used,
+                                wall_ms = pipeline.total_wall_time_ms,
+                                "Task completed"
+                            );
+                        }
+                        Err(err) => {
+                            let task_err = lak_core::types::task::TaskError {
+                                code: "PIPELINE_ERROR".into(),
+                                message: err.clone(),
+                                retryable: true,
+                            };
+
+                            if let Some(t) = s.tasks.get_mut(&task_id) {
+                                t.state = TaskState::Failed(task_err.clone());
+                                t.updated_at = Utc::now();
+                                t.stats.completed_at = Some(Utc::now());
+                            }
+
+                            if let Some(runtime) = s.agents.get_mut(&agent_id) {
+                                runtime.process.record_task_failure();
+                                runtime.agent.state = AgentState::Idle;
+                            }
+
+                            s.journal.record_transition(
+                                task_id,
+                                agent_id,
+                                TaskState::Running,
+                                TaskState::Failed(task_err),
+                            );
+
+                            tracing::warn!(
+                                task_id = %task_id,
+                                error = %err,
+                                "Task failed"
+                            );
+                        }
+                    }
+
+                    s.scheduler.complete(task_id);
+                }
+            }
+
+            tracing::info!("[KernelService] Execution loop stopped");
+        });
     }
 
     /// Register an LLM driver with the reasoning service
@@ -750,6 +922,7 @@ impl AgentKernel for KernelService {
 
     async fn shutdown(&self) -> Result<(), KernelError> {
         tracing::info!("[KernelService] Shutdown requested");
+        self.shutdown.store(true, Ordering::SeqCst);
         Ok(())
     }
 }
